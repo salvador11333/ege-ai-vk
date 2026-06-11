@@ -44,7 +44,8 @@ def ai_process():
     
     response = requests.post(init_url, headers=headers)
     if "X-Goog-Upload-URL" not in response.headers:
-        raise Exception(f"Ошибка инициализации: {response.text}")
+        print(f"❌ Ошибка инициализации. Ответ сервера: {response.text}")
+        return None
         
     upload_url = response.headers["X-Goog-Upload-URL"]
     
@@ -53,18 +54,24 @@ def ai_process():
     with open(FILE_PATH, "rb") as f:
         requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
     
-    # 3. Получение имени файла (URI) через список файлов
+    # 3. Получение имени файла
     print("⏳ Ожидаю готовности на сервере...")
     file_uri = None
     while not file_uri:
         time.sleep(5)
-        # Получаем список файлов
-        res = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files?key={GEMINI_API_KEY}").json()
+        response = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files?key={GEMINI_API_KEY}")
+        
+        # Безопасная проверка JSON
+        try:
+            res = response.json()
+        except:
+            print(f"❌ Ошибка ответа сервера: {response.text}")
+            return None
+            
         files = res.get("files", [])
         if not files:
             continue
             
-        # Берем самый последний файл (он наш)
         latest_file = files[-1]
         state = latest_file.get("state")
         
@@ -72,7 +79,8 @@ def ai_process():
             file_uri = latest_file["name"]
             print(f"✅ Файл готов: {file_uri}")
         elif state == "FAILED":
-            raise Exception("Ошибка обработки видео на стороне Google")
+            print(f"❌ Ошибка обработки видео: {latest_file.get('error', 'неизвестна')}")
+            return None
         else:
             print(f"⌛ Статус: {state}...")
 
@@ -82,9 +90,14 @@ def ai_process():
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
     
     url = f"https://generativelanguage.googleapis.com/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]}).json()
+    response = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]})
     
-    return res["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        res = response.json()
+        return res["candidates"][0]["content"]["parts"][0]["text"]
+    except:
+        print(f"❌ Ошибка при получении ответа от ИИ: {response.text}")
+        return None
 
 def add_comment(post_id, text):
     requests.get("https://api.vk.com/method/wall.createComment", params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "post_id": post_id, "message": f"✅ ИИ-РАЗБОР:\n\n{text}"})
