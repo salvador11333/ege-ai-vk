@@ -23,59 +23,80 @@ def upload_to_vk():
 def ai_process():
     print("🧠 Обработка через Gemini...")
     file_size = os.path.getsize(FILE_PATH)
-    headers = {"x-goog-api-key": GEMINI_API_KEY}
-
-    # 1. Запрос на загрузку
-    init_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
-    upload_init = requests.post(init_url, headers={"X-Goog-Upload-Protocol": "resumable", "X-Goog-Upload-Command": "start", "X-Goog-Upload-Header-Content-Length": str(file_size), "X-Goog-Upload-Header-Content-Type": "video/mp4"})
     
-    if "X-Goog-Upload-URL" not in upload_init.headers:
-        print(f"❌ Ошибка инициализации: {upload_init.text}")
+    # 1. Начало загрузки
+    init_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
+    headers = {
+        "X-Goog-Upload-Protocol": "resumable",
+        "X-Goog-Upload-Command": "start",
+        "X-Goog-Upload-Header-Content-Length": str(file_size),
+        "X-Goog-Upload-Header-Content-Type": "video/mp4"
+    }
+    
+    response = requests.post(init_url, headers=headers)
+    if "X-Goog-Upload-URL" not in response.headers:
+        print(f"❌ Ошибка инициализации: {response.text}")
         return None
-    upload_url = upload_init.headers["X-Goog-Upload-URL"]
-
-    # 2. Загрузка файла
+        
+    upload_url = response.headers["X-Goog-Upload-URL"]
+    
+    # 2. Загрузка
     print("📤 Загружаю видео...")
     with open(FILE_PATH, "rb") as f:
         requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
-
-    # 3. Ожидание обработки
+    
+    # 3. Ожидание обработки (API v1beta)
     print("⏳ Ожидаю готовности на сервере...")
     file_uri = None
     while not file_uri:
         time.sleep(5)
-        resp = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files?key={GEMINI_API_KEY}")
-        data = resp.json()
+        response = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files?key={GEMINI_API_KEY}")
+        data = response.json()
         files = data.get("files", [])
         if not files: continue
-        
-        latest = files[-1]
-        state = latest.get("state")
+            
+        latest_file = files[-1]
+        state = latest_file.get("state")
         
         if state == "ACTIVE":
-            file_uri = latest.get("uri")
+            file_uri = latest_file.get("uri")
             print(f"✅ Файл готов: {file_uri}")
         elif state == "FAILED":
-            print(f"❌ Ошибка обработки: {latest.get('error')}")
+            print(f"❌ Ошибка обработки: {latest_file.get('error')}")
             return None
-        else:
-            print(f"⌛ Статус: {state}...")
 
-    # 4. Запрос к модели
+    # 4. Запрос к модели (ВАЖНО: CamelCase в JSON)
     print("🤖 Запрашиваю анализ...")
     prompt_text = open(f"{SUBJECT}_prompt.txt", "r", encoding="utf-8").read() if os.path.exists(f"{SUBJECT}_prompt.txt") else "Реши задачу."
     
-    url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
     
-    response = requests.post(url, json={
-        "contents": [{"parts": [{"text": prompt_text}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]
-    })
-
+    # ИСПОЛЬЗУЕМ КЛЮЧИ CamelCase (fileData, mimeType, fileUri)
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt_text},
+                {
+                    "fileData": {
+                        "mimeType": "video/mp4",
+                        "fileUri": file_uri
+                    }
+                }
+            ]
+        }]
+    }
+    
+    response = requests.post(url, json=payload)
+    
     if response.status_code != 200:
         print(f"❌ ОШИБКА API {response.status_code}: {response.text}")
         return None
     
-    return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        print(f"❌ Ошибка парсинга: {e}")
+        return None
 
 def add_comment(post_id, text):
     requests.get("https://api.vk.com/method/wall.createComment", params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "post_id": post_id, "message": f"✅ ИИ-РАЗБОР:\n\n{text}"})
