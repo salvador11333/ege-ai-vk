@@ -42,45 +42,46 @@ def ai_process():
         "X-Goog-Upload-Header-Content-Type": "video/mp4"
     }
     
-    print("🔗 Подключаюсь к Gemini API...")
-    response = requests.post(init_url, headers=headers, timeout=30)
+    response = requests.post(init_url, headers=headers)
     
     if "X-Goog-Upload-URL" not in response.headers:
         raise Exception(f"Не удалось получить URL для загрузки. Ответ: {response.text}")
         
     upload_url = response.headers["X-Goog-Upload-URL"]
     
-    # Загрузка файла
-    print(f"📤 Загружаю видео ({file_size} байт)...")
+    # Загрузка
     with open(FILE_PATH, "rb") as f:
-        # Добавили timeout, чтобы не висело вечно
-        requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read(), timeout=60)
+        requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
     
     file_id = upload_url.split('/')[-1]
     
-    # Ожидание обработки
-    print("⏳ Файл загружен. Жду готовности (обработки) на сервере...")
+    # Ожидание обработки с расширенным выводом
+    print("⏳ Видео загружено. Ожидаю готовности на сервере...")
     while True:
-        status = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key={GEMINI_API_KEY}", timeout=30).json()
+        status = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key={GEMINI_API_KEY}").json()
         
         state = status.get("state")
+        
         if state == "ACTIVE":
-            print("✅ Видео готово к анализу!")
+            print("✅ Видео готово!")
             file_uri = status["name"]
             break
         elif state == "FAILED":
-            raise Exception("Ошибка обработки видео на стороне Google")
+            raise Exception(f"Ошибка обработки видео: {status.get('error', 'неизвестна')}")
         else:
-            print(f"⌛ Статус: {state}...") # Будет видно, что скрипт живой
-        time.sleep(5)
+            # Если статус не ACTIVE и не FAILED, выводим что именно пришло
+            print(f"⌛ Ожидание обработки... Текущий статус: {state}")
+            print(f"DEBUG: Полный ответ от Google: {status}") 
+        
+        time.sleep(10) # Увеличили паузу, чтобы не спамить запросами
     
-    # Генерация контента
+    # Генерация
     print("🤖 Запрашиваю анализ у ИИ...")
     prompt_file = f"{SUBJECT}_prompt.txt"
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
     
     url = f"https://generativelanguage.googleapis.com/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]}, timeout=60).json()
+    res = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]}).json()
     
     return res["candidates"][0]["content"]["parts"][0]["text"]
 
