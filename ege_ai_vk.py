@@ -60,29 +60,22 @@ def ai_process():
     while not file_uri:
         time.sleep(5)
         response = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files?key={GEMINI_API_KEY}")
-        
-        # Безопасная проверка JSON
         try:
             res = response.json()
         except:
-            print(f"❌ Ошибка ответа сервера: {response.text}")
+            print(f"❌ Ошибка JSON: {response.text}")
             return None
             
         files = res.get("files", [])
-        if not files:
-            continue
+        if not files: continue
             
         latest_file = files[-1]
-        state = latest_file.get("state")
-        
-        if state == "ACTIVE":
+        if latest_file.get("state") == "ACTIVE":
             file_uri = latest_file["name"]
             print(f"✅ Файл готов: {file_uri}")
-        elif state == "FAILED":
-            print(f"❌ Ошибка обработки видео: {latest_file.get('error', 'неизвестна')}")
+        elif latest_file.get("state") == "FAILED":
+            print(f"❌ Ошибка: {latest_file.get('error')}")
             return None
-        else:
-            print(f"⌛ Статус: {state}...")
 
     # 4. Запрос к модели
     print("🤖 Запрашиваю анализ...")
@@ -90,13 +83,23 @@ def ai_process():
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
     
     url = f"https://generativelanguage.googleapis.com/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
-    response = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]})
+    
+    payload = {
+        "contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]
+    }
+    
+    response = requests.post(url, json=payload)
+    
+    # ТУТ ВАЖНЫЙ ДЕБАГ
+    if response.status_code != 200:
+        print(f"❌ ОШИБКА API {response.status_code}: {response.text}")
+        return None
     
     try:
         res = response.json()
         return res["candidates"][0]["content"]["parts"][0]["text"]
-    except:
-        print(f"❌ Ошибка при получении ответа от ИИ: {response.text}")
+    except Exception as e:
+        print(f"❌ Ошибка парсинга ответа: {e}. Ответ: {response.text}")
         return None
 
 def add_comment(post_id, text):
