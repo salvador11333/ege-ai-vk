@@ -42,33 +42,60 @@ def upload_to_vk():
     return post['response']['post_id']
 
 def ai_process():
-    print("🧠 Обработка через Gemini...")
+    print("🧠 Обработка через Gemini 1.5-flash...")
     prompt_file = f"{SUBJECT}_prompt.txt"
-    system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
+    system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу с видео."
     
-    # Upload
     file_size = os.path.getsize(FILE_PATH)
+    
+    # Инициализация
     init = requests.post(f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}", 
                          headers={"X-Goog-Upload-Protocol": "resumable", "X-Goog-Upload-Command": "start", 
                                   "X-Goog-Upload-Header-Content-Length": str(file_size), 
                                   "X-Goog-Upload-Header-Content-Type": "video/mp4"}).headers
     
-    if "X-Goog-Upload-URL" not in init:
-        raise Exception("Ошибка инициализации Gemini: проверь API ключ")
-
     with open(FILE_PATH, "rb") as f:
-        requests.post(init["X-Goog-Upload-URL"], headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
+        requests.post(init["X-Goog-Upload-URL"], 
+                      headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, 
+                      data=f.read())
     
     file_name = init["X-Goog-Upload-URL"].split('/')[-1]
-    while requests.get(f"https://generativelanguage.googleapis.com/v1beta/files/{file_name}?key={GEMINI_API_KEY}").json().get("state") != "ACTIVE":
+    
+    # Ожидание готовности
+    print("⏳ Ожидаем готовности видео на сервере Google...")
+    for i in range(10): # Ждем до 50 секунд
+        status = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files/{file_name}?key={GEMINI_API_KEY}").json()
+        if status.get("state") == "ACTIVE": break
         time.sleep(5)
     
-    res = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}", 
-                        json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": f"files/{file_name}"}}]}]}).json()
+    # ЗАПРОС К МОДЕЛИ С ОТКЛЮЧЕНИЕМ ФИЛЬТРОВ
+    print("🚀 Отправляю запрос...")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
     
-    if "candidates" not in res:
-        print("DEBUG AI ERROR:", res)
-        raise Exception("ИИ не вернул ответ")
+    payload = {
+        "contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": f"files/{file_name}"}}]}],
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+    }
+    
+    response = requests.post(url, json=payload, timeout=120)
+    
+    # ПРОВЕРКА ОТВЕТА
+    if response.status_code != 200:
+        print(f"❌ ОШИБКА HTTP {response.status_code}: {response.text}")
+        raise Exception("Ошибка сервера Gemini")
+        
+    res = response.json()
+    
+    if "candidates" not in res or not res["candidates"][0].get("content"):
+        print("❌ ИИ НЕ ВЕРНУЛ ОТВЕТ. Полный ответ сервера:")
+        print(res)
+        raise Exception("Пустой ответ от ИИ (возможно, фильтр безопасности)")
+    
     return res["candidates"][0]["content"]["parts"][0]["text"]
 
 def add_comment(post_id, text):
