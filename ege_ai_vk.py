@@ -64,7 +64,8 @@ def ai_process():
     # 4. Запрос к модели
     print("🤖 Запрашиваю анализ...")
     prompt_text = open(f"{SUBJECT}_prompt.txt", "r", encoding="utf-8").read() if os.path.exists(f"{SUBJECT}_prompt.txt") else "Реши задачу."
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    
+    url = f"https://generativelanguage.googleapis.com/v1/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
     
     response = requests.post(url, json={
         "contents": [{"parts": [{"text": prompt_text}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]
