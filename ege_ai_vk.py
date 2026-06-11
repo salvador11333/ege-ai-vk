@@ -7,7 +7,7 @@ VK_TOKEN = "vk1.a.xs8rpIjm3x8xYvUJ4ztgeujy6XZ7BF2r5NuE47Dmdpo6TMz02yfTQAJyJkKlsL
 GEMINI_API_KEY = "AQ.Ab8RN6KkYRN_83R75AZ7gjiW2MzKgpORLxrz_ieBcw07Mc0s6Q"
 GROUP_ID = 239501197
 SUBJECT = "it" 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL_NAME = "gemini-3.5-flash"
 
 def safe_json(response):
     data = response.json()
