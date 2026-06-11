@@ -24,7 +24,7 @@ def ai_process():
     print("🧠 Обработка через Gemini...")
     file_size = os.path.getsize(FILE_PATH)
     
-    # 1. Начало загрузки
+    # 1. Запрос на загрузку
     init_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
     headers = {
         "X-Goog-Upload-Protocol": "resumable",
@@ -45,7 +45,7 @@ def ai_process():
     with open(FILE_PATH, "rb") as f:
         requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
     
-    # 3. Ожидание обработки (API v1beta)
+    # 3. Ожидание обработки
     print("⏳ Ожидаю готовности на сервере...")
     file_uri = None
     while not file_uri:
@@ -65,38 +65,28 @@ def ai_process():
             print(f"❌ Ошибка обработки: {latest_file.get('error')}")
             return None
 
-    # 4. Запрос к модели (ВАЖНО: CamelCase в JSON)
+    # 4. Запрос к модели С ПОВТОРАМИ (Retry)
     print("🤖 Запрашиваю анализ...")
     prompt_text = open(f"{SUBJECT}_prompt.txt", "r", encoding="utf-8").read() if os.path.exists(f"{SUBJECT}_prompt.txt") else "Реши задачу."
-    
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt_text}, {"fileData": {"mimeType": "video/mp4", "fileUri": file_uri}}]}]}
     
-    # ИСПОЛЬЗУЕМ КЛЮЧИ CamelCase (fileData, mimeType, fileUri)
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt_text},
-                {
-                    "fileData": {
-                        "mimeType": "video/mp4",
-                        "fileUri": file_uri
-                    }
-                }
-            ]
-        }]
-    }
+    max_retries = 3
+    for attempt in range(max_retries):
+        response = requests.post(url, json=payload)
+        
+        if response.status_code == 200:
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        elif response.status_code == 503:
+            wait_time = 10 * (attempt + 1)
+            print(f"⚠️ Google перегружен (503). Жду {wait_time} сек. и пробую снова ({attempt+1}/{max_retries})...")
+            time.sleep(wait_time)
+        else:
+            print(f"❌ ОШИБКА API {response.status_code}: {response.text}")
+            return None
     
-    response = requests.post(url, json=payload)
-    
-    if response.status_code != 200:
-        print(f"❌ ОШИБКА API {response.status_code}: {response.text}")
-        return None
-    
-    try:
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        print(f"❌ Ошибка парсинга: {e}")
-        return None
+    print("❌ Не удалось получить ответ от Google после нескольких попыток.")
+    return None
 
 def add_comment(post_id, text):
     requests.get("https://api.vk.com/method/wall.createComment", params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "post_id": post_id, "message": f"✅ ИИ-РАЗБОР:\n\n{text}"})
