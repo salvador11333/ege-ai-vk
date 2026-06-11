@@ -1,66 +1,74 @@
 import os
 import requests
 import time
+from secrets import GEMINI_API_KEY
 
 FILE_PATH = "/storage/emulated/0/MacroDroid/ege.mp4"
 VK_TOKEN = "vk1.a.xs8rpIjm3x8xYvUJ4ztgeujy6XZ7BF2r5NuE47Dmdpo6TMz02yfTQAJyJkKlsL4BwK4auSZBIF5EqnU1vTojxriqtvdKvpKrgoILBWWKvC4xJ5sl5TlUNkVQk902EcHyY_CJa9oSLriZk3uCVqIpzC_lR3mJd2sB53j0upiWi7n91Z3jYfW4QiXZFJKEEsoJ4Ckz0iPU6Rv_18F9M9aU7A"
-GEMINI_API_KEY = "AQ.Ab8RN6LDJWz4vA_gYz7snnAs_AnlaJQyTL_BG0XM1Tlw6PZLsQ"
 GROUP_ID = 239501197
-SUBJECT = "it" 
-MODEL_NAME = "gemini-3.5-flash"
+SUBJECT = "it"
+MODEL_NAME = "gemini-1.5-flash"
 
 def upload_to_vk():
     print("📦 Загрузка видео в ВК...")
     api_url = "https://api.vk.com/method/"
-    srv = requests.get(api_url + "docs.getWallUploadServer", 
-                       params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}).json()
+    srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}).json()
     with open(FILE_PATH, 'rb') as f:
         upload = requests.post(srv['response']['upload_url'], files={'file': f}).json()
-    doc = requests.get(api_url + "docs.save", 
-                       params={"access_token": VK_TOKEN, "v": "5.131", "file": upload['file']}).json()
-    
+    doc = requests.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload['file']}).json()
     attachment = f"doc{doc['response']['doc']['owner_id']}_{doc['response']['doc']['id']}"
-    post = requests.get(api_url + "wall.post", 
-                        params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, 
-                                "from_group": 1, "attachments": attachment, 
-                                "message": "🤖 ИИ проводит глубокий анализ видео, ожидайте разбор..."}).json()
+    post = requests.get(api_url + "wall.post", params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "from_group": 1, "attachments": attachment, "message": "🤖 ИИ проводит глубокий анализ видео..."}).json()
     return post['response']['post_id']
 
 def ai_process():
     print("🧠 Обработка через Gemini...")
+    
+    # ПРОВЕРКА ФАЙЛА
+    if not os.path.exists(FILE_PATH):
+        raise Exception(f"Файл {FILE_PATH} не найден!")
+
     prompt_file = f"{SUBJECT}_prompt.txt"
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу с видео."
     
-    # 1. Загрузка
     file_size = os.path.getsize(FILE_PATH)
-    init = requests.post(f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}", 
-                         headers={"X-Goog-Upload-Protocol": "resumable", "X-Goog-Upload-Command": "start", 
-                                  "X-Goog-Upload-Header-Content-Length": str(file_size), 
-                                  "X-Goog-Upload-Header-Content-Type": "video/mp4"}).headers
+    init_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
+    init_headers = {
+        "X-Goog-Upload-Protocol": "resumable", 
+        "X-Goog-Upload-Command": "start", 
+        "X-Goog-Upload-Header-Content-Length": str(file_size), 
+        "X-Goog-Upload-Header-Content-Type": "video/mp4"
+    }
     
-    upload_url = init["X-Goog-Upload-URL"]
+    print(f"DEBUG: Отправляю запрос на загрузку файла ({file_size} байт)...")
+    response = requests.post(init_url, headers=init_headers)
+    
+    print(f"DEBUG: Статус ответа сервера: {response.status_code}")
+    print(f"DEBUG: Тело ответа: {response.text}")
+    
+    if response.status_code != 200:
+        raise Exception("Сервер Gemini отклонил запрос. Проверь статус выше.")
+        
+    upload_url = response.headers.get("X-Goog-Upload-URL")
+    if not upload_url:
+        raise Exception("Google не вернул URL для загрузки.")
+    
     with open(FILE_PATH, "rb") as f:
         requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
     
-    # 2. Получение правильного URI (ФИКС ЗДЕСЬ)
     file_id = upload_url.split('/')[-1]
     while True:
         status = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key={GEMINI_API_KEY}").json()
         if status.get("state") == "ACTIVE":
-            file_uri = status["name"] # Получаем "files/xyz123" прямо от API
+            file_uri = status["name"]
             break
         time.sleep(5)
     
-    # 3. Запрос
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, 
-                                                           {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]}).json()
+    res = requests.post(url, json={"contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]}).json()
     return res["candidates"][0]["content"]["parts"][0]["text"]
 
 def add_comment(post_id, text):
-    requests.get("https://api.vk.com/method/wall.createComment", 
-                 params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, 
-                         "post_id": post_id, "message": f"✅ ИИ-РАЗБОР:\n\n{text}"})
+    requests.get("https://api.vk.com/method/wall.createComment", params={"access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "post_id": post_id, "message": f"✅ ИИ-РАЗБОР:\n\n{text}"})
 
 if __name__ == "__main__":
     try:
