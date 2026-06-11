@@ -33,7 +33,7 @@ def ai_process():
     print("🧠 Обработка через Gemini...")
     file_size = os.path.getsize(FILE_PATH)
     
-    # Запрос на начало загрузки
+    # 1. Запрос на начало загрузки
     init_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={GEMINI_API_KEY}"
     headers = {
         "X-Goog-Upload-Protocol": "resumable",
@@ -43,40 +43,41 @@ def ai_process():
     }
     
     response = requests.post(init_url, headers=headers)
-    
     if "X-Goog-Upload-URL" not in response.headers:
-        raise Exception(f"Не удалось получить URL для загрузки. Ответ: {response.text}")
+        raise Exception(f"Ошибка инициализации: {response.text}")
         
     upload_url = response.headers["X-Goog-Upload-URL"]
     
-    # Загрузка
+    # 2. Загрузка файла
+    print("📤 Загружаю видео...")
     with open(FILE_PATH, "rb") as f:
         requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
     
-    file_id = upload_url.split('/')[-1]
-    
-    # Ожидание обработки с расширенным выводом
-    print("⏳ Видео загружено. Ожидаю готовности на сервере...")
-    while True:
-        status = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key={GEMINI_API_KEY}").json()
-        
-        state = status.get("state")
+    # 3. Получение имени файла (URI) через список файлов
+    print("⏳ Ожидаю готовности на сервере...")
+    file_uri = None
+    while not file_uri:
+        time.sleep(5)
+        # Получаем список файлов
+        res = requests.get(f"https://generativelanguage.googleapis.com/v1beta/files?key={GEMINI_API_KEY}").json()
+        files = res.get("files", [])
+        if not files:
+            continue
+            
+        # Берем самый последний файл (он наш)
+        latest_file = files[-1]
+        state = latest_file.get("state")
         
         if state == "ACTIVE":
-            print("✅ Видео готово!")
-            file_uri = status["name"]
-            break
+            file_uri = latest_file["name"]
+            print(f"✅ Файл готов: {file_uri}")
         elif state == "FAILED":
-            raise Exception(f"Ошибка обработки видео: {status.get('error', 'неизвестна')}")
+            raise Exception("Ошибка обработки видео на стороне Google")
         else:
-            # Если статус не ACTIVE и не FAILED, выводим что именно пришло
-            print(f"⌛ Ожидание обработки... Текущий статус: {state}")
-            print(f"DEBUG: Полный ответ от Google: {status}") 
-        
-        time.sleep(10) # Увеличили паузу, чтобы не спамить запросами
-    
-    # Генерация
-    print("🤖 Запрашиваю анализ у ИИ...")
+            print(f"⌛ Статус: {state}...")
+
+    # 4. Запрос к модели
+    print("🤖 Запрашиваю анализ...")
     prompt_file = f"{SUBJECT}_prompt.txt"
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
     
