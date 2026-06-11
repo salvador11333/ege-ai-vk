@@ -77,12 +77,13 @@ def ai_process():
             print(f"❌ Ошибка: {latest_file.get('error')}")
             return None
 
-    # 4. Запрос к модели
+    # 4. Запрос к модели (ИСПРАВЛЕНА ССЫЛКА)
     print("🤖 Запрашиваю анализ...")
     prompt_file = f"{SUBJECT}_prompt.txt"
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
     
-    url = f"https://generativelanguage.googleapis.com/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    # Добавили /v1beta/ перед models
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
         "contents": [{"parts": [{"text": system_prompt}, {"file_data": {"mime_type": "video/mp4", "file_uri": file_uri}}]}]
@@ -90,7 +91,6 @@ def ai_process():
     
     response = requests.post(url, json=payload)
     
-    # ТУТ ВАЖНЫЙ ДЕБАГ
     if response.status_code != 200:
         print(f"❌ ОШИБКА API {response.status_code}: {response.text}")
         return None
@@ -99,7 +99,7 @@ def ai_process():
         res = response.json()
         return res["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        print(f"❌ Ошибка парсинга ответа: {e}. Ответ: {response.text}")
+        print(f"❌ Ошибка парсинга ответа: {e}")
         return None
 
 def add_comment(post_id, text):
