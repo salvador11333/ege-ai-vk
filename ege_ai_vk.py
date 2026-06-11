@@ -4,7 +4,7 @@ import time
 
 FILE_PATH = "/storage/emulated/0/MacroDroid/ege.mp4"
 VK_TOKEN = "vk1.a.xs8rpIjm3x8xYvUJ4ztgeujy6XZ7BF2r5NuE47Dmdpo6TMz02yfTQAJyJkKlsL4BwK4auSZBIF5EqnU1vTojxriqtvdKvpKrgoILBWWKvC4xJ5sl5TlUNkVQk902EcHyY_CJa9oSLriZk3uCVqIpzC_lR3mJd2sB53j0upiWi7n91Z3jYfW4QiXZFJKEEsoJ4Ckz0iPU6Rv_18F9M9aU7A"
-GEMINI_API_KEY = "AQ.Ab8RN6ILZzS9PHhgxmwrbw_pgnHgTaZRyDPKg2AheAA-sxlaqw"
+GEMINI_API_KEY = "AQ.Ab8RN6LDJWz4vA_gYz7snnAs_AnlaJQyTL_BG0XM1Tlw6PZLsQ"
 GROUP_ID = 239501197
 SUBJECT = "it" 
 MODEL_NAME = "gemini-3.5-flash"
