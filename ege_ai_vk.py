@@ -44,7 +44,7 @@ def ai_process():
     
     response = requests.post(init_url, headers=headers)
     if "X-Goog-Upload-URL" not in response.headers:
-        print(f"❌ Ошибка инициализации. Ответ сервера: {response.text}")
+        print(f"❌ Ошибка инициализации: {response.text}")
         return None
         
     upload_url = response.headers["X-Goog-Upload-URL"]
@@ -54,7 +54,7 @@ def ai_process():
     with open(FILE_PATH, "rb") as f:
         requests.post(upload_url, headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0"}, data=f.read())
     
-    # 3. Получение имени файла
+    # 3. Получение URI файла
     print("⏳ Ожидаю готовности на сервере...")
     file_uri = None
     while not file_uri:
@@ -63,26 +63,25 @@ def ai_process():
         try:
             res = response.json()
         except:
-            print(f"❌ Ошибка JSON: {response.text}")
-            return None
+            continue
             
         files = res.get("files", [])
         if not files: continue
             
         latest_file = files[-1]
         if latest_file.get("state") == "ACTIVE":
-            file_uri = latest_file["name"]
+            # ИСПОЛЬЗУЕМ uri ВМЕСТО name
+            file_uri = latest_file.get("uri")
             print(f"✅ Файл готов: {file_uri}")
         elif latest_file.get("state") == "FAILED":
-            print(f"❌ Ошибка: {latest_file.get('error')}")
+            print(f"❌ Ошибка обработки: {latest_file.get('error')}")
             return None
 
-    # 4. Запрос к модели (ИСПРАВЛЕНА ССЫЛКА)
+    # 4. Запрос к модели
     print("🤖 Запрашиваю анализ...")
     prompt_file = f"{SUBJECT}_prompt.txt"
     system_prompt = open(prompt_file, "r", encoding="utf-8").read() if os.path.exists(prompt_file) else "Реши задачу."
     
-    # Добавили /v1beta/ перед models
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
@@ -99,7 +98,7 @@ def ai_process():
         res = response.json()
         return res["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        print(f"❌ Ошибка парсинга ответа: {e}")
+        print(f"❌ Ошибка парсинга: {e}")
         return None
 
 def add_comment(post_id, text):
