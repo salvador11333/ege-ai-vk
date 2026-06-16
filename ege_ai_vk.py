@@ -24,40 +24,24 @@ def log(text):
 
 # --- УМНАЯ ЗАЩИТА ОТ ПОВТОРНОГО ЗАПУСКА ---
 if os.path.exists(LOCK_FILE):
-    # Если замок обновлялся меньше 15 секунд назад — значит, скрипт РЕАЛЬНО работает в фоне
     if time.time() - os.path.getmtime(LOCK_FILE) < 15:
         print("⛔ Скрипт уже запущен и работает в фоне. Выхожу.")
         sys.exit()
     else:
-        # Если замок старый (скрипт упал или телефон перезагрузился) — сносим его
         os.remove(LOCK_FILE)
 
-# Создаем свежий замок
 with open(LOCK_FILE, "w") as f: f.write("work")
 
-def compress_video():
-    log("🗜️ Начинаю умное сжатие (сохранение качества текста)...")
-    cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 20 -preset fast {OPT_FILE}"
-    subprocess.run(cmd, shell=True)
-    return os.path.exists(OPT_FILE)
-
-def upload_video():
+def upload_video(target_file):
     try:
-        target_file = FILE_PATH
-        if os.path.exists(FILE_PATH):
-            if compress_video():
-                target_file = OPT_FILE
-                log(f"✅ Сжатие завершено! Размер: {os.path.getsize(OPT_FILE)} байт.")
-            else:
-                log("⚠️ Ошибка сжатия, отправляю оригинал.")
-
-        log("📦 Начинаю загрузку файла в ВК...")
+        log(f"📦 Отправляю файл в ВК ({os.path.getsize(target_file)} байт)...")
         api_url = "https://api.vk.com/method/"
         
         srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
         
+        # ЖЕСТКО ЗАДАЕМ ИМЯ И ФОРМАТ, чтобы избежать ошибки 'not saved'
         with open(target_file, 'rb') as f:
-            upload_resp = requests.post(srv['response']['upload_url'], files={'file': f}, timeout=600).json()
+            upload_resp = requests.post(srv['response']['upload_url'], files={'file': ('video.mp4', f, 'video/mp4')}, timeout=600).json()
         
         if 'error' in upload_resp or 'file' not in upload_resp:
             log(f"❌ Ошибка ВК при загрузке: {upload_resp}")
@@ -74,6 +58,7 @@ def upload_video():
         log("✅ Успешно отправлено!")
         with open(SUCCESS_FLAG, "w") as f: f.write("ok")
         
+        # Удаляем мусор
         if os.path.exists(FILE_PATH): os.remove(FILE_PATH)
         if os.path.exists(OPT_FILE): os.remove(OPT_FILE)
         return True
@@ -83,10 +68,9 @@ def upload_video():
         return False
 
 try:
-    log("▶️ Скрипт активен. Вхожу в режим вечного ожидания ready.flag...")
+    log("▶️ Скрипт активен. Жду ready.flag от MacroDroid...")
     
     while True:
-        # Каждые 2 секунды обновляем время изменения лок-файла ("пульс" скрипта)
         try:
             with open(LOCK_FILE, "w") as f: f.write("work")
         except:
@@ -94,34 +78,49 @@ try:
 
         if os.path.exists(READY_FLAG):
             if not os.path.exists(FILE_PATH):
-                log("⚠️ Флаг готовности получен, но файл видео отсутствует. Сброс.")
+                log("⚠️ Флаг есть, а видео нет! Сброс.")
                 os.remove(READY_FLAG)
                 continue
 
-            log("🔥 Обнаружен ready.flag! Начинаю обработку.")
+            log("🔥 Обнаружен ready.flag! Приступаю к работе.")
             os.remove(READY_FLAG) 
             
+            # --- 1. ЭТАП СЖАТИЯ (ВЫПОЛНЯЕТСЯ ТОЛЬКО 1 РАЗ) ---
+            target_file = FILE_PATH
+            log("🗜️ Начинаю турбо-сжатие (ultrafast)...")
+            
+            # loglevel error убирает системный спам с экрана
+            cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 22 -preset ultrafast -loglevel error {OPT_FILE}"
+            subprocess.run(cmd, shell=True)
+            
+            if os.path.exists(OPT_FILE) and os.path.getsize(OPT_FILE) > 0:
+                target_file = OPT_FILE
+                log(f"✅ Сжатие завершено! Новый размер: {os.path.getsize(OPT_FILE)} байт.")
+            else:
+                log("⚠️ Ошибка сжатия, буду отправлять тяжелый оригинал.")
+
+            # --- 2. ЭТАП ОТПРАВКИ (5 ПОПЫТОК) ---
             attempts = 0
             max_retries = 5
             success = False
             
             while attempts < max_retries:
-                if upload_video():
+                if upload_video(target_file):
                     success = True
                     break
                 attempts += 1
-                log(f"⚠️ Попытка {attempts}/{max_retries} не удалась. Повтор через 30 сек...")
+                log(f"⚠️ Попытка отправки {attempts}/{max_retries} не удалась. Повтор через 30 сек...")
                 time.sleep(30)
             
             if not success:
-                log("🚨 Не удалось отправить видео за 5 попыток. Создаю файл ошибки.")
+                log("🚨 Сеть мертва (5/5 провалов). Сигнал ошибки.")
                 with open(ERROR_FLAG, "w") as f: f.write("error")
             else:
-                log("💤 Видео обработано. Возврат в режим ожидания флага...")
+                log("💤 Видео на стене. Снова жду команду...")
                 
         time.sleep(2) 
 
 finally:
     if os.path.exists(LOCK_FILE):
         os.remove(LOCK_FILE)
-    log("🏁 Скрипт завершил работу.")
+    log("🏁 Скрипт остановлен.")
