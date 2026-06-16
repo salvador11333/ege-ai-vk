@@ -14,8 +14,8 @@ READY_FLAG = "/storage/emulated/0/MacroDroid/ready.flag"
 SUCCESS_FLAG = "/storage/emulated/0/MacroDroid/success.flag"
 ERROR_FLAG = "/storage/emulated/0/MacroDroid/error.flag"
 
-VK_TOKEN = "vk1.a.lsRykF02XWyz7uuaOpLUZpneg0twi5dgZhUE40c0nwiJ7JSVYnis2mTbXT6XVgNRYhy6eWZIp_Hc2hO8P2Fw9aDiHuukrw2bd7xD-UL8AF6haARKltenqLCpiBLejcmKU6E-t1_MEu--E24WtAt2ckTymp8wbdrGrZyOscNWbaV_KkIFMf5AteYwgBy9to40IDG1maSGz9JHC4b0LoGpMQ"
-GROUP_ID = 239501197
+# ⚠️ ВСТАВЬ СКОПИРОВАННЫЙ ТОКЕН СЮДА:
+YANDEX_TOKEN = "y0__wgBELP10MEBGKjfQyCQi476F27p3yubu9e0ABud6y-7q-ZqAVuv"
 
 def log(text):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -32,43 +32,55 @@ if os.path.exists(LOCK_FILE):
 
 with open(LOCK_FILE, "w") as f: f.write("work")
 
-def upload_video(target_file):
-    try:
-        log(f"📦 Отправляю файл в ВК ({os.path.getsize(target_file)} байт)...")
-        api_url = "https://api.vk.com/method/"
-        
-        srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
-        
-        # ЖЕСТКО ЗАДАЕМ ИМЯ И ФОРМАТ, чтобы избежать ошибки 'not saved'
-        with open(target_file, 'rb') as f:
-            upload_resp = requests.post(srv['response']['upload_url'], files={'file': ('video.mp4', f, 'video/mp4')}, timeout=600).json()
-        
-        if 'error' in upload_resp or 'file' not in upload_resp:
-            log(f"❌ Ошибка ВК при загрузке: {upload_resp}")
-            return False
+def compress_video():
+    log("🗜️ Начинаю сжатие (Профиль: Съемка монитора)...")
+    # Срезаем кадры до 30 FPS и ставим пресет fast для идеального баланса веса и четкости текста
+    cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 24 -preset fast -r 30 -loglevel error {OPT_FILE}"
+    subprocess.run(cmd, shell=True)
+    return os.path.exists(OPT_FILE)
 
-        doc = requests.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload_resp['file']}, timeout=30).json()
+def upload_to_yandex(target_file):
+    try:
+        log(f"📦 Запрашиваю сервер Яндекса для файла ({os.path.getsize(target_file)} байт)...")
         
-        attachment = f"doc{doc['response']['doc']['owner_id']}_{doc['response']['doc']['id']}"
-        requests.get(api_url + "wall.post", params={
-            "access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "from_group": 1, 
-            "attachments": attachment, "message": "📹 Новое видео."
-        }, timeout=30)
+        # Генерируем уникальное имя файла с текущим временем
+        time_str = time.strftime("%H-%M-%S")
+        file_name = f"ege_zadanie_{time_str}.mp4"
         
-        log("✅ Успешно отправлено!")
-        with open(SUCCESS_FLAG, "w") as f: f.write("ok")
+        headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
         
-        # Удаляем мусор
-        if os.path.exists(FILE_PATH): os.remove(FILE_PATH)
-        if os.path.exists(OPT_FILE): os.remove(OPT_FILE)
-        return True
+        # 1. Запрашиваем у Яндекса ссылку на загрузку в корень Диска
+        get_url = f"https://cloud-api.yandex.net/v1/disk/resources/upload?path=disk:/{file_name}&overwrite=true"
+        resp = requests.get(get_url, headers=headers, timeout=30).json()
         
+        if 'href' not in resp:
+            log(f"❌ Ошибка API Яндекса (проверь токен): {resp}")
+            return False
+            
+        upload_link = resp['href']
+        
+        # 2. Выгружаем файл напрямую на сервера Яндекса
+        log(f"🚀 Ссылка получена! Отправляю файл на Яндекс.Диск...")
+        with open(target_file, 'rb') as f:
+            upload_resp = requests.put(upload_link, data=f, timeout=600)
+            
+        if upload_resp.status_code in [201, 202]:
+            log(f"✅ Успешно загружено на Диск! Файл: {file_name}")
+            with open(SUCCESS_FLAG, "w") as f: f.write("ok")
+            
+            if os.path.exists(FILE_PATH): os.remove(FILE_PATH)
+            if os.path.exists(OPT_FILE): os.remove(OPT_FILE)
+            return True
+        else:
+            log(f"❌ Яндекс отклонил файл. Код ответа: {upload_resp.status_code}")
+            return False
+            
     except Exception as e:
         log(f"❌ Сбой сети: {e}")
         return False
 
 try:
-    log("▶️ Скрипт активен. Жду ready.flag от MacroDroid...")
+    log("▶️ Скрипт активен. Назначение: ЯНДЕКС.ДИСК. Ожидаю ready.flag...")
     
     while True:
         try:
@@ -85,27 +97,19 @@ try:
             log("🔥 Обнаружен ready.flag! Приступаю к работе.")
             os.remove(READY_FLAG) 
             
-            # --- 1. ЭТАП СЖАТИЯ (ВЫПОЛНЯЕТСЯ ТОЛЬКО 1 РАЗ) ---
             target_file = FILE_PATH
-            log("🗜️ Начинаю турбо-сжатие (ultrafast)...")
-            
-            # loglevel error убирает системный спам с экрана
-            cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 22 -preset ultrafast -loglevel error {OPT_FILE}"
-            subprocess.run(cmd, shell=True)
-            
-            if os.path.exists(OPT_FILE) and os.path.getsize(OPT_FILE) > 0:
+            if compress_video():
                 target_file = OPT_FILE
-                log(f"✅ Сжатие завершено! Новый размер: {os.path.getsize(OPT_FILE)} байт.")
+                log(f"✅ Сжатие завершено! Новый вес: {os.path.getsize(OPT_FILE)} байт.")
             else:
-                log("⚠️ Ошибка сжатия, буду отправлять тяжелый оригинал.")
+                log("⚠️ Ошибка сжатия, отправляю оригинал.")
 
-            # --- 2. ЭТАП ОТПРАВКИ (5 ПОПЫТОК) ---
             attempts = 0
             max_retries = 5
             success = False
             
             while attempts < max_retries:
-                if upload_video(target_file):
+                if upload_to_yandex(target_file):
                     success = True
                     break
                 attempts += 1
@@ -116,7 +120,7 @@ try:
                 log("🚨 Сеть мертва (5/5 провалов). Сигнал ошибки.")
                 with open(ERROR_FLAG, "w") as f: f.write("error")
             else:
-                log("💤 Видео на стене. Снова жду команду...")
+                log("💤 Видео на Диске. Снова жду команду от MacroDroid...")
                 
         time.sleep(2) 
 
