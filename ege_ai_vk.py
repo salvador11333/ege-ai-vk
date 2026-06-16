@@ -7,7 +7,7 @@ FILE_PATH = "/storage/emulated/0/MacroDroid/ege.mp4"
 SMALL_FILE = "/storage/emulated/0/MacroDroid/ege_opt.mp4"
 LOG_FILE = "/data/data/com.termux/files/home/bot_log.txt"
 
-VK_TOKEN = "ВАШ_ТОКЕН" # Вставь свой токен
+VK_TOKEN = "vk1.a.lsRykF02XWyz7uuaOpLUZpneg0twi5dgZhUE40c0nwiJ7JSVYnis2mTbXT6XVgNRYhy6eWZIp_Hc2hO8P2Fw9aDiHuukrw2bd7xD-UL8AF6haARKltenqLCpiBLejcmKU6E-t1_MEu--E24WtAt2ckTymp8wbdrGrZyOscNWbaV_KkIFMf5AteYwgBy9to40IDG1maSGz9JHC4b0LoGpMQ" # Вставь свой токен
 GROUP_ID = 239501197
 
 def log(text):
