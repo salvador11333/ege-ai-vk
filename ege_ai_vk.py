@@ -2,8 +2,10 @@ import os
 import requests
 import time
 import sys
+import subprocess
 
 FILE_PATH = "/storage/emulated/0/MacroDroid/ege.mp4"
+OPT_FILE = "/storage/emulated/0/MacroDroid/ege_opt.mp4"
 LOG_FILE = "/data/data/com.termux/files/home/bot_log.txt"
 LOCK_FILE = "/data/data/com.termux/files/home/script.lock"
 
@@ -20,6 +22,7 @@ def log(text):
         f.write(f"{time.ctime()} - {text}\n")
     print(text)
 
+# Защита от дублей
 if os.path.exists(LOCK_FILE):
     if time.time() - os.path.getmtime(LOCK_FILE) > 1800:
         os.remove(LOCK_FILE)
@@ -29,25 +32,36 @@ if os.path.exists(LOCK_FILE):
 
 with open(LOCK_FILE, "w") as f: f.write("work")
 
-def attempt_upload():
-    # Ждем отмашку от MacroDroid
-    if not os.path.exists(READY_FLAG) or not os.path.exists(FILE_PATH): 
-        return "not_ready"
-    
+def compress_video():
+    log("🗜️ Начинаю умное сжатие (сохранение качества текста)...")
+    # Используем libx264 с CRF 20 (почти без потерь) и preset fast для скорости
+    cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 20 -preset fast {OPT_FILE}"
+    subprocess.run(cmd, shell=True)
+    return os.path.exists(OPT_FILE)
+
+def upload_video():
     try:
-        # Убираем флаг, чтобы не начать отправлять дважды
-        os.remove(READY_FLAG)
-        log(f"📦 Получена отмашка от MacroDroid! Отправляю...")
+        target_file = FILE_PATH
         
+        # Если оригинальный файл есть, сжимаем его перед отправкой
+        if os.path.exists(FILE_PATH):
+            if compress_video():
+                target_file = OPT_FILE
+                log(f"✅ Сжатие завершено! Новый размер: {os.path.getsize(OPT_FILE)} байт.")
+            else:
+                log("⚠️ Ошибка сжатия, попробую отправить тяжелый оригинал.")
+
+        log(f"📦 Начинаю загрузку файла в ВК...")
         api_url = "https://api.vk.com/method/"
+        
         srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
         
-        with open(FILE_PATH, 'rb') as f:
+        with open(target_file, 'rb') as f:
             upload_resp = requests.post(srv['response']['upload_url'], files={'file': f}, timeout=600).json()
         
         if 'error' in upload_resp or 'file' not in upload_resp:
             log(f"❌ Ошибка ВК при загрузке: {upload_resp}")
-            return "error"
+            return False
 
         doc = requests.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload_resp['file']}, timeout=30).json()
         
@@ -59,36 +73,51 @@ def attempt_upload():
         
         log("✅ Успешно отправлено!")
         with open(SUCCESS_FLAG, "w") as f: f.write("ok")
-        os.remove(FILE_PATH)
-        return "success"
+        
+        # Подчищаем оба файла, чтобы не забивать память телефона
+        if os.path.exists(FILE_PATH): os.remove(FILE_PATH)
+        if os.path.exists(OPT_FILE): os.remove(OPT_FILE)
+        return True
         
     except Exception as e:
         log(f"❌ Сбой сети: {e}")
-        # Если сеть отвалилась, возвращаем флаг на место, чтобы скрипт попробовал этот же файл снова
-        with open(READY_FLAG, "w") as f: f.write("ok")
-        return "error"
+        return False
 
 try:
-    max_retries = 5
-    attempts = 0
+    log("▶️ Запуск. Жду появления файла ready.flag от MacroDroid...")
     
-    log("▶️ Запуск, жду команду от MacroDroid...")
-    while attempts < max_retries:
-        status = attempt_upload()
-        
-        if status == "success":
-            break
-        elif status == "error":
-            attempts += 1
-            log(f"⚠️ Попытка сети {attempts}/{max_retries} не удалась. Жду 30 сек...")
-            time.sleep(30)
-        elif status == "not_ready":
-            time.sleep(3) # Просто тихо спим, пока MacroDroid не создаст файл
+    while True:
+        if os.path.exists(READY_FLAG):
+            if not os.path.exists(FILE_PATH):
+                log("⚠️ Флаг есть, а видео нет! Игнорирую...")
+                os.remove(READY_FLAG)
+                continue
 
-    if attempts >= max_retries:
-        log("🚨 Лимит попыток исчерпан. Создаю сигнал ошибки.")
-        with open(ERROR_FLAG, "w") as f: f.write("error")
+            log("🔥 Увидел ready.flag! Приступаю к работе.")
+            os.remove(READY_FLAG) 
+            
+            attempts = 0
+            max_retries = 5
+            success = False
+            
+            while attempts < max_retries:
+                if upload_video():
+                    success = True
+                    break
+                
+                attempts += 1
+                log(f"⚠️ Ошибка отправки {attempts}/{max_retries}. Жду 30 сек...")
+                time.sleep(30)
+            
+            if not success:
+                log("🚨 Все 5 попыток провалились. Сеть мертва. Сигнал ошибки.")
+                with open(ERROR_FLAG, "w") as f: f.write("error")
+            else:
+                log("💤 Отправлено. Снова жду команду от MacroDroid...")
+                
+        time.sleep(2) 
 
 finally:
     if os.path.exists(LOCK_FILE):
         os.remove(LOCK_FILE)
+    log("🏁 Скрипт остановлен.")
