@@ -22,19 +22,21 @@ def log(text):
         f.write(f"{time.ctime()} - {text}\n")
     print(text)
 
-# Защита от дублей
+# --- УМНАЯ ЗАЩИТА ОТ ПОВТОРНОГО ЗАПУСКА ---
 if os.path.exists(LOCK_FILE):
-    if time.time() - os.path.getmtime(LOCK_FILE) > 1800:
-        os.remove(LOCK_FILE)
-    else:
-        log("⛔ Скрипт уже запущен, выхожу.")
+    # Если замок обновлялся меньше 15 секунд назад — значит, скрипт РЕАЛЬНО работает в фоне
+    if time.time() - os.path.getmtime(LOCK_FILE) < 15:
+        print("⛔ Скрипт уже запущен и работает в фоне. Выхожу.")
         sys.exit()
+    else:
+        # Если замок старый (скрипт упал или телефон перезагрузился) — сносим его
+        os.remove(LOCK_FILE)
 
+# Создаем свежий замок
 with open(LOCK_FILE, "w") as f: f.write("work")
 
 def compress_video():
     log("🗜️ Начинаю умное сжатие (сохранение качества текста)...")
-    # Используем libx264 с CRF 20 (почти без потерь) и preset fast для скорости
     cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 20 -preset fast {OPT_FILE}"
     subprocess.run(cmd, shell=True)
     return os.path.exists(OPT_FILE)
@@ -42,16 +44,14 @@ def compress_video():
 def upload_video():
     try:
         target_file = FILE_PATH
-        
-        # Если оригинальный файл есть, сжимаем его перед отправкой
         if os.path.exists(FILE_PATH):
             if compress_video():
                 target_file = OPT_FILE
-                log(f"✅ Сжатие завершено! Новый размер: {os.path.getsize(OPT_FILE)} байт.")
+                log(f"✅ Сжатие завершено! Размер: {os.path.getsize(OPT_FILE)} байт.")
             else:
-                log("⚠️ Ошибка сжатия, попробую отправить тяжелый оригинал.")
+                log("⚠️ Ошибка сжатия, отправляю оригинал.")
 
-        log(f"📦 Начинаю загрузку файла в ВК...")
+        log("📦 Начинаю загрузку файла в ВК...")
         api_url = "https://api.vk.com/method/"
         
         srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
@@ -74,7 +74,6 @@ def upload_video():
         log("✅ Успешно отправлено!")
         with open(SUCCESS_FLAG, "w") as f: f.write("ok")
         
-        # Подчищаем оба файла, чтобы не забивать память телефона
         if os.path.exists(FILE_PATH): os.remove(FILE_PATH)
         if os.path.exists(OPT_FILE): os.remove(OPT_FILE)
         return True
@@ -84,16 +83,22 @@ def upload_video():
         return False
 
 try:
-    log("▶️ Запуск. Жду появления файла ready.flag от MacroDroid...")
+    log("▶️ Скрипт активен. Вхожу в режим вечного ожидания ready.flag...")
     
     while True:
+        # Каждые 2 секунды обновляем время изменения лок-файла ("пульс" скрипта)
+        try:
+            with open(LOCK_FILE, "w") as f: f.write("work")
+        except:
+            pass
+
         if os.path.exists(READY_FLAG):
             if not os.path.exists(FILE_PATH):
-                log("⚠️ Флаг есть, а видео нет! Игнорирую...")
+                log("⚠️ Флаг готовности получен, но файл видео отсутствует. Сброс.")
                 os.remove(READY_FLAG)
                 continue
 
-            log("🔥 Увидел ready.flag! Приступаю к работе.")
+            log("🔥 Обнаружен ready.flag! Начинаю обработку.")
             os.remove(READY_FLAG) 
             
             attempts = 0
@@ -104,20 +109,19 @@ try:
                 if upload_video():
                     success = True
                     break
-                
                 attempts += 1
-                log(f"⚠️ Ошибка отправки {attempts}/{max_retries}. Жду 30 сек...")
+                log(f"⚠️ Попытка {attempts}/{max_retries} не удалась. Повтор через 30 сек...")
                 time.sleep(30)
             
             if not success:
-                log("🚨 Все 5 попыток провалились. Сеть мертва. Сигнал ошибки.")
+                log("🚨 Не удалось отправить видео за 5 попыток. Создаю файл ошибки.")
                 with open(ERROR_FLAG, "w") as f: f.write("error")
             else:
-                log("💤 Отправлено. Снова жду команду от MacroDroid...")
+                log("💤 Видео обработано. Возврат в режим ожидания флага...")
                 
         time.sleep(2) 
 
 finally:
     if os.path.exists(LOCK_FILE):
         os.remove(LOCK_FILE)
-    log("🏁 Скрипт остановлен.")
+    log("🏁 Скрипт завершил работу.")
