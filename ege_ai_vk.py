@@ -1,11 +1,13 @@
 import os
-import requests
 import time
+import vk_api
+import subprocess
 
 FILE_PATH = "/storage/emulated/0/MacroDroid/ege.mp4"
+SMALL_FILE = "/storage/emulated/0/MacroDroid/ege_opt.mp4"
 LOG_FILE = "/data/data/com.termux/files/home/bot_log.txt"
 
-VK_TOKEN = "vk1.a.xs8rpIjm3x8xYvUJ4ztgeujy6XZ7BF2r5NuE47Dmdpo6TMz02yfTQAJyJkKlsL4BwK4auSZBIF5EqnU1vTojxriqtvdKvpKrgoILBWWKvC4xJ5sl5TlUNkVQk902EcHyY_CJa9oSLriZk3uCVqIpzC_lR3mJd2sB53j0upiWi7n91Z3jYfW4QiXZFJKEEsoJ4Ckz0iPU6Rv_18F9M9aU7A"
+VK_TOKEN = "ВАШ_ТОКЕН" # Вставь свой токен
 GROUP_ID = 239501197
 
 def log(text):
@@ -13,43 +15,48 @@ def log(text):
         f.write(f"{time.ctime()} - {text}\n")
     print(text)
 
-def attempt_upload():
-    # 1. Проверяем, существует ли файл и не пустой ли он
-    if not os.path.exists(FILE_PATH) or os.path.getsize(FILE_PATH) < 1024:
-        log("Файл не найден или слишком мал (ждет записи)...")
-        return False
-    
+def optimize_video():
+    # CRF 20 — это «почти без потерь». Текст будет четким, размер упадет.
+    # Preset medium — баланс скорости и сжатия.
+    cmd = f"ffmpeg -y -i {FILE_PATH} -vcodec libx264 -crf 20 -preset medium {SMALL_FILE}"
+    subprocess.run(cmd, shell=True)
+    return os.path.exists(SMALL_FILE)
+
+def upload():
     try:
-        log("Начинаю загрузку...")
-        api_url = "https://api.vk.com/method/"
+        if not os.path.exists(FILE_PATH): return False
         
-        # Получаем сервер
-        srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=15).json()
+        log("Оптимизация...")
+        if not optimize_video(): return False
         
-        # Загружаем файл
-        with open(FILE_PATH, 'rb') as f:
-            upload_resp = requests.post(srv['response']['upload_url'], files={'file': f}, timeout=60).json()
+        log("Авторизация в ВК...")
+        vk_session = vk_api.VkApi(token=VK_TOKEN)
+        upload = vk_api.VkUpload(vk_session)
         
-        # Сохраняем
-        doc = requests.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload_resp['file']}, timeout=15).json()
+        log("Загрузка в ВК (vk_api)...")
+        # Загружаем как документ (быстрее и надежнее)
+        doc = upload.document(SMALL_FILE, title="Задание")
         
         # Публикуем
-        attachment = f"doc{doc['response']['doc']['owner_id']}_{doc['response']['doc']['id']}"
-        requests.get(api_url + "wall.post", params={
-            "access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "from_group": 1, 
-            "attachments": attachment, "message": "📹 Новое видео."
-        }, timeout=15)
+        vk = vk_session.get_api()
+        attachment = f"doc{doc['owner_id']}_{doc['id']}"
+        vk.wall.post(
+            owner_id=-GROUP_ID,
+            from_group=1,
+            attachments=attachment,
+            message="Видео."
+        )
         
-        log("Успешно отправлено!")
-        os.remove(FILE_PATH) # Удаляем только если всё прошло успешно
+        log("Успешно!")
+        with open("/storage/emulated/0/MacroDroid/success.flag", "w") as f: f.write("ok")
+        os.remove(FILE_PATH)
+        os.remove(SMALL_FILE)
         return True
         
     except Exception as e:
-        log(f"Ошибка при отправке: {e}")
+        log(f"Ошибка: {e}")
         return False
 
-log("Запуск цикла...")
 while True:
-    if attempt_upload():
-        break
-    time.sleep(20) # Пауза перед следующей попыткой
+    if upload(): break
+    time.sleep(20)
