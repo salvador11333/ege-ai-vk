@@ -19,6 +19,9 @@ ERROR_FLAG = "/storage/emulated/0/MacroDroid/error.flag"
 VK_TOKEN = "vk1.a.lsRykF02XWyz7uuaOpLUZpneg0twi5dgZhUE40c0nwiJ7JSVYnis2mTbXT6XVgNRYhy6eWZIp_Hc2hO8P2Fw9aDiHuukrw2bd7xD-UL8AF6haARKltenqLCpiBLejcmKU6E-t1_MEu--E24WtAt2ckTymp8wbdrGrZyOscNWbaV_KkIFMf5AteYwgBy9to40IDG1maSGz9JHC4b0LoGpMQ"
 GROUP_ID = 239501197
 
+# --- ГЛОБАЛЬНАЯ СЕССИЯ (TCP POOLING) ---
+session = requests.Session()
+
 def log(text):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"{time.ctime()} - {text}\n")
@@ -30,55 +33,57 @@ if os.path.exists(LOCK_FILE):
         print("⛔ Скрипт уже работает в фоне.")
         sys.exit()
     else:
-        os.remove(LOCK_FILE)
+        try: os.remove(LOCK_FILE)
+        except: pass
 
 with open(LOCK_FILE, "w") as f: f.write("work")
 
 # --- 1. ШУСТРЫЙ НАБЛЮДАТЕЛЬ (ФОНОВЫЙ ПОТОК) ---
 def watch_for_flags():
-    """Лечит структуру файла, используя безопасное временное расширение .tmp"""
+    """Лечит структуру файла + защита от зависаний и пустых файлов"""
     while True:
         if os.path.exists(READY_FLAG):
             if os.path.exists(FILE_PATH):
                 timestamp = time.strftime("%H%M%S")
-                
-                # Задаем два имени: временное (.tmp) и финальное (.mp4)
                 temp_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.tmp")
                 final_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.mp4")
                 
                 try:
                     log("🛠️ Нормализация структуры файла (Fast Start)...")
                     
-                    # ffmpeg собирает файл под расширением .tmp (Грузчик его пока не видит)
-                    cmd = f"ffmpeg -y -i {FILE_PATH} -c copy -movflags +faststart -loglevel error {temp_file}"
-                    subprocess.run(cmd, shell=True)
+                    # ИСПРАВЛЕНИЕ ЗДЕСЬ: Добавлен параметр '-f mp4'
+                    cmd = f"ffmpeg -y -i {FILE_PATH} -c copy -movflags +faststart -f mp4 -loglevel error {temp_file}"
+                    subprocess.run(cmd, shell=True, timeout=30)
                     
-                    # Если сборка прошла успешно
-                    if os.path.exists(temp_file):
-                        # Мгновенное переименование: теперь файл 100% готов, и Грузчик может его забрать
+                    if os.path.exists(temp_file) and os.path.getsize(temp_file) > 1024:
                         os.rename(temp_file, final_file)
                         
-                        # Удаляем оригинал от камеры
                         if os.path.exists(FILE_PATH):
-                            os.remove(FILE_PATH)
+                            try: os.remove(FILE_PATH)
+                            except: pass
                             
                         log(f"📥 Файл 100% готов и передан в очередь: {final_file}")
+                    else:
+                        log("❌ Ошибка: ffmpeg выдал пустой файл.")
+                        if os.path.exists(temp_file):
+                            try: os.remove(temp_file)
+                            except: pass
+                            
+                except subprocess.TimeoutExpired:
+                    log("⚠️ ffmpeg завис и был принудительно убит системой.")
                 except Exception as e:
                     log(f"⚠️ Ошибка обработки файла: {e}")
             else:
                 log("⚠️ Флаг есть, а оригинала видео нет. Игнорирую.")
             
-            # Сносим флаг
-            try:
-                os.remove(READY_FLAG)
-            except:
-                pass
+            try: os.remove(READY_FLAG)
+            except: pass
                 
         time.sleep(1)
 
 # --- 2. АГРЕССИВНЫЙ ГРУЗЧИК (ОСНОВНОЙ ПОТОК) ---
 def upload_file(target_file):
-    """Пытается пропихнуть один файл в ВК до 5 раз без долгих пауз"""
+    """Отправка через единую сессию для максимальной стабильности"""
     api_url = "https://api.vk.com/method/"
     attempts = 0
     max_retries = 5
@@ -86,11 +91,11 @@ def upload_file(target_file):
     while attempts < max_retries:
         try:
             log(f"📦 Загрузка {target_file} (попытка {attempts+1}/{max_retries})...")
-            srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
+            
+            srv = session.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
             
             with open(target_file, 'rb') as f:
-                # Передаем жесткий MIME-тип видео и режем сетевой тайм-аут до 3 минут вместо 20.
-                upload_resp = requests.post(
+                upload_resp = session.post(
                     srv['response']['upload_url'], 
                     files={'file': ('video.mp4', f, 'video/mp4')}, 
                     timeout=180
@@ -99,13 +104,13 @@ def upload_file(target_file):
             if 'error' in upload_resp or 'file' not in upload_resp:
                 log(f"❌ Ошибка ВК: {upload_resp}")
                 attempts += 1
-                time.sleep(3) # Быстрый перезапуск попытки через 3 секунды
+                time.sleep(3)
                 continue
 
-            doc = requests.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload_resp['file']}, timeout=30).json()
+            doc = session.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload_resp['file']}, timeout=30).json()
             attachment = f"doc{doc['response']['doc']['owner_id']}_{doc['response']['doc']['id']}"
             
-            requests.get(api_url + "wall.post", params={
+            session.get(api_url + "wall.post", params={
                 "access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "from_group": 1, 
                 "attachments": attachment, "message": "📹 Видео из очереди."
             }, timeout=30)
@@ -116,43 +121,42 @@ def upload_file(target_file):
         except Exception as e:
             log(f"❌ Сбой сети/Таймаут соединения: {e}")
             attempts += 1
-            time.sleep(3) # Быстрый перезапуск попытки через 3 секунды
+            time.sleep(3)
             
     return False
 
 # --- ТОЧКА ВХОДА ---
 try:
-    # Запускаем фонового наблюдателя в отдельном изолированном потоке
     t = threading.Thread(target=watch_for_flags, daemon=True)
     t.start()
     
-    log("▶️ Скрипт активен (Режим: ОЧЕРЕДЬ + FASTSTART). Ожидаю файлы...")
+    log("▶️ Скрипт активен (Режим: СЕССИИ + ОЧЕРЕДЬ + FASTSTART). Ожидаю файлы...")
     
     while True:
-        # Продлеваем жизнь замку активности
         with open(LOCK_FILE, "w") as f: f.write("work")
         
-        # Сканируем папку на наличие готовых файлов очереди (.mp4) и сортируем их
         queue_files = sorted(glob.glob(os.path.join(QUEUE_DIR, "ege_queue_*.mp4")))
         
         if queue_files:
             current_file = queue_files[0]
-            log(f"📋 В очереди обнаружено файлов: {len(queue_files)}. Запускаю отправку первого.")
+            log(f"📋 В очереди файлов: {len(queue_files)}. Запускаю отправку первого.")
             
             if upload_file(current_file):
                 with open(SUCCESS_FLAG, "w") as f: f.write("ok")
                 if os.path.exists(current_file):
-                    os.remove(current_file)
+                    try: os.remove(current_file)
+                    except: pass
             else:
                 with open(ERROR_FLAG, "w") as f: f.write("error")
-                # Если файл тотально битый и не ушел за 5 попыток — маркируем его ошибкой
                 error_file = current_file + ".error"
-                os.rename(current_file, error_file)
+                try: os.rename(current_file, error_file)
+                except: pass
                 log(f"🚨 Файл {current_file} заблокирован после 5 провалов. Перехожу к следующему.")
         else:
             time.sleep(2)
 
 finally:
     if os.path.exists(LOCK_FILE):
-        os.remove(LOCK_FILE)
+        try: os.remove(LOCK_FILE)
+        except: pass
     log("🏁 Скрипт остановлен.")
