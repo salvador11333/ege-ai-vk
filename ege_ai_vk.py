@@ -36,31 +36,39 @@ with open(LOCK_FILE, "w") as f: f.write("work")
 
 # --- 1. ШУСТРЫЙ НАБЛЮДАТЕЛЬ (ФОНОВЫЙ ПОТОК) ---
 def watch_for_flags():
-    """Мгновенно лечит структуру файла и ставит в очередь без тайм-аутов"""
+    """Лечит структуру файла, используя безопасное временное расширение .tmp"""
     while True:
         if os.path.exists(READY_FLAG):
             if os.path.exists(FILE_PATH):
                 timestamp = time.strftime("%H%M%S")
-                queue_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.mp4")
+                
+                # Задаем два имени: временное (.tmp) и финальное (.mp4)
+                temp_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.tmp")
+                final_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.mp4")
                 
                 try:
                     log("🛠️ Нормализация структуры файла (Fast Start)...")
-                    # Переносим индексное оглавление видео (moov atom) в начало файла.
-                    # Кодек '-c copy' копирует поток без перекодирования. Это занимает 0.2 секунды.
-                    cmd = f"ffmpeg -y -i {FILE_PATH} -c copy -movflags +faststart -loglevel error {queue_file}"
+                    
+                    # ffmpeg собирает файл под расширением .tmp (Грузчик его пока не видит)
+                    cmd = f"ffmpeg -y -i {FILE_PATH} -c copy -movflags +faststart -loglevel error {temp_file}"
                     subprocess.run(cmd, shell=True)
                     
-                    if os.path.exists(queue_file):
-                        # Как только копия создана — оригинал можно удалять, MacroDroid свободен для новой записи
+                    # Если сборка прошла успешно
+                    if os.path.exists(temp_file):
+                        # Мгновенное переименование: теперь файл 100% готов, и Грузчик может его забрать
+                        os.rename(temp_file, final_file)
+                        
+                        # Удаляем оригинал от камеры
                         if os.path.exists(FILE_PATH):
                             os.remove(FILE_PATH)
-                        log(f"📥 Файл успешно нормализован и отправлен в очередь: {queue_file}")
+                            
+                        log(f"📥 Файл 100% готов и передан в очередь: {final_file}")
                 except Exception as e:
                     log(f"⚠️ Ошибка обработки файла: {e}")
             else:
                 log("⚠️ Флаг есть, а оригинала видео нет. Игнорирую.")
             
-            # Всегда сносим флаг, чтобы MacroDroid не зацикливался
+            # Сносим флаг
             try:
                 os.remove(READY_FLAG)
             except:
@@ -89,7 +97,7 @@ def upload_file(target_file):
                 ).json()
             
             if 'error' in upload_resp or 'file' not in upload_resp:
-                log(f"❌ Ошибка ВК (not saved или сбой парсинга): {upload_resp}")
+                log(f"❌ Ошибка ВК: {upload_resp}")
                 attempts += 1
                 time.sleep(3) # Быстрый перезапуск попытки через 3 секунды
                 continue
@@ -124,7 +132,7 @@ try:
         # Продлеваем жизнь замку активности
         with open(LOCK_FILE, "w") as f: f.write("work")
         
-        # Сканируем папку на наличие файлов очереди и сортируем их от старых к новым
+        # Сканируем папку на наличие готовых файлов очереди (.mp4) и сортируем их
         queue_files = sorted(glob.glob(os.path.join(QUEUE_DIR, "ege_queue_*.mp4")))
         
         if queue_files:
@@ -137,8 +145,7 @@ try:
                     os.remove(current_file)
             else:
                 with open(ERROR_FLAG, "w") as f: f.write("error")
-                # Если файл тотально битый и не ушел за 5 попыток — 
-                # маркируем его ошибкой, чтобы он не забивал конвейер
+                # Если файл тотально битый и не ушел за 5 попыток — маркируем его ошибкой
                 error_file = current_file + ".error"
                 os.rename(current_file, error_file)
                 log(f"🚨 Файл {current_file} заблокирован после 5 провалов. Перехожу к следующему.")
