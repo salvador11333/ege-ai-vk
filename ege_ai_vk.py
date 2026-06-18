@@ -2,10 +2,11 @@ import os
 import requests
 import time
 import sys
-import shutil
+import glob
 import threading
 
 FILE_PATH = "/storage/emulated/0/MacroDroid/ege.mp4"
+QUEUE_DIR = "/storage/emulated/0/MacroDroid/"
 LOG_FILE = "/data/data/com.termux/files/home/bot_log.txt"
 LOCK_FILE = "/data/data/com.termux/files/home/script.lock"
 
@@ -22,97 +23,116 @@ def log(text):
         f.write(f"{time.ctime()} - {text}\n")
     print(text)
 
-# Защита от дублей
+# --- ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ---
 if os.path.exists(LOCK_FILE):
     if time.time() - os.path.getmtime(LOCK_FILE) < 15:
-        print("⛔ Скрипт уже запущен.")
+        print("⛔ Скрипт уже работает в фоне.")
         sys.exit()
     else:
         os.remove(LOCK_FILE)
 
 with open(LOCK_FILE, "w") as f: f.write("work")
 
-def upload_worker(target_file):
-    """Эта функция работает в фоне, параллельно основному скрипту"""
+# --- 1. ШУСТРЫЙ НАБЛЮДАТЕЛЬ (РАБОТАЕТ В ФОНЕ) ---
+def watch_for_flags():
+    """Мгновенно хватает новые файлы и ставит в очередь"""
+    while True:
+        if os.path.exists(READY_FLAG):
+            if os.path.exists(FILE_PATH):
+                # Создаем уникальное имя
+                timestamp = time.strftime("%H%M%S")
+                queue_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.mp4")
+                
+                try:
+                    # Переименование работает мгновенно и освобождает ege.mp4 для макроса
+                    os.rename(FILE_PATH, queue_file)
+                    log(f"📥 Файл схвачен в очередь: {queue_file}")
+                except Exception as e:
+                    log(f"⚠️ Ошибка захвата файла: {e}")
+            else:
+                log("⚠️ Флаг есть, а оригинала видео нет. Игнорирую.")
+            
+            # Всегда сносим флаг, чтобы MacroDroid мог работать дальше
+            try:
+                os.remove(READY_FLAG)
+            except:
+                pass
+                
+        time.sleep(1) # Проверяет флаг каждую секунду
+
+# --- 2. НЕСПЕШНЫЙ ГРУЗЧИК ---
+def upload_file(target_file):
+    """Пытается пропихнуть один файл в ВК до 5 раз"""
+    api_url = "https://api.vk.com/method/"
     attempts = 0
     max_retries = 5
-    success = False
-    api_url = "https://api.vk.com/method/"
     
     while attempts < max_retries:
         try:
-            log(f"🚀 Поток запущен. Отправляю {target_file} (Попытка {attempts+1}/{max_retries})")
-            
+            log(f"📦 Загрузка {target_file} (попытка {attempts+1}/{max_retries})...")
             srv = requests.get(api_url + "docs.getWallUploadServer", params={"access_token": VK_TOKEN, "v": "5.131", "group_id": GROUP_ID}, timeout=30).json()
             
             with open(target_file, 'rb') as f:
                 upload_resp = requests.post(srv['response']['upload_url'], files={'file': ('video.mp4', f, 'video/mp4')}, timeout=1200).json()
             
             if 'error' in upload_resp or 'file' not in upload_resp:
-                log(f"❌ Ошибка ВК для {target_file}: {upload_resp}")
+                log(f"❌ Ошибка ВК: {upload_resp}")
                 attempts += 1
                 time.sleep(30)
                 continue
 
             doc = requests.get(api_url + "docs.save", params={"access_token": VK_TOKEN, "v": "5.131", "file": upload_resp['file']}, timeout=30).json()
-            
             attachment = f"doc{doc['response']['doc']['owner_id']}_{doc['response']['doc']['id']}"
+            
             requests.get(api_url + "wall.post", params={
                 "access_token": VK_TOKEN, "v": "5.131", "owner_id": -GROUP_ID, "from_group": 1, 
-                "attachments": attachment, "message": "📹 Видео из параллельного потока."
+                "attachments": attachment, "message": "📹 Видео из очереди."
             }, timeout=30)
             
             log(f"✅ Успешно отправлено: {target_file}")
-            with open(SUCCESS_FLAG, "w") as f: f.write("ok")
-            success = True
-            break
+            return True
             
         except Exception as e:
-            log(f"❌ Сбой сети в потоке {target_file}: {e}")
+            log(f"❌ Сбой сети: {e}")
             attempts += 1
             time.sleep(30)
+            
+    return False
 
-    # Удаляем ТОЛЬКО КОПИЮ после успеха или 5 провалов.
-    if os.path.exists(target_file):
-        os.remove(target_file)
-        log(f"🗑️ Временная копия {target_file} удалена.")
-        
-    if not success:
-        with open(ERROR_FLAG, "w") as f: f.write("error")
-        log(f"🚨 Файл {target_file} не отправлен. Лимит попыток.")
-
-
+# --- ОСНОВНОЙ ЦИКЛ СКРИПТА ---
 try:
-    log("▶️ Скрипт активен (МНОГОПОТОЧНОСТЬ). Ожидаю ready.flag...")
+    # Запускаем наблюдателя параллельно
+    t = threading.Thread(target=watch_for_flags, daemon=True)
+    t.start()
+    
+    log("▶️ Скрипт активен (Режим: ОЧЕРЕДЬ). Жду файлы...")
+    
     while True:
+        # Пульс для замка, чтобы система знала, что мы живы
         with open(LOCK_FILE, "w") as f: f.write("work")
         
-        if os.path.exists(READY_FLAG):
-            if not os.path.exists(FILE_PATH):
-                log("⚠️ Флаг есть, а оригинала видео нет! Сброс.")
-                os.remove(READY_FLAG)
-                continue
-            
-            log("🔥 Обнаружен ready.flag! Беру видео в работу.")
-            
-            # 1. Генерируем уникальное имя для копии (по текущему времени)
-            timestamp = time.strftime("%H%M%S")
-            copy_path = f"/storage/emulated/0/MacroDroid/ege_copy_{timestamp}.mp4"
-            
-            # 2. Моментально копируем файл
-            log(f"🗂️ Делаю дубликат: {copy_path}")
-            shutil.copy2(FILE_PATH, copy_path)
-            
-            # 3. Сразу сносим флаг, чтобы скрипт был готов принять следующее видео
-            os.remove(READY_FLAG)
-            
-            # 4. Запускаем отправку в параллельном потоке
-            log("🔄 Передаю дубликат рабочему потоку. Возвращаюсь в засаду...")
-            t = threading.Thread(target=upload_worker, args=(copy_path,))
-            t.start()
-                
-        time.sleep(2)
+        # Ищем все файлы очереди и сортируем их по времени создания (сначала старые)
+        queue_files = sorted(glob.glob(os.path.join(QUEUE_DIR, "ege_queue_*.mp4")))
         
+        if queue_files:
+            current_file = queue_files[0]
+            log(f"📋 В очереди файлов: {len(queue_files)}. Беру в работу самый старый.")
+            
+            if upload_file(current_file):
+                with open(SUCCESS_FLAG, "w") as f: f.write("ok")
+                os.remove(current_file) # Удаляем файл из очереди после успеха
+            else:
+                with open(ERROR_FLAG, "w") as f: f.write("error")
+                # Если файл полностью битый и не отправляется 5 раз, 
+                # переименовываем его, чтобы он не заблокировал всю очередь навечно
+                error_file = current_file + ".error"
+                os.rename(current_file, error_file)
+                log(f"🚨 Файл пропущен из-за мертвой сети. Перехожу к следующему.")
+        else:
+            # Если очередь пуста, просто спим и ждем
+            time.sleep(2)
+
 finally:
-    if os.path.exists(LOCK_FILE): os.remove(LOCK_FILE)
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
     log("🏁 Скрипт остановлен.")
