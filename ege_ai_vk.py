@@ -44,15 +44,28 @@ def watch_for_flags():
     while True:
         if os.path.exists(READY_FLAG):
             if os.path.exists(FILE_PATH):
+                # НОВОВВЕДЕНИЕ 1: Ждем, пока MacroDroid полностью физически допишет файл на диск
+                last_size = -1
+                retries = 0
+                while retries < 15:  # Ждем до 3 секунд стабилизации файла
+                    try:
+                        current_size = os.path.getsize(FILE_PATH)
+                        if current_size > 0 and current_size == last_size:
+                            break
+                        last_size = current_size
+                    except: pass
+                    time.sleep(0.2)
+                    retries += 1
+
                 timestamp = time.strftime("%H%M%S")
                 temp_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.tmp")
                 final_file = os.path.join(QUEUE_DIR, f"ege_queue_{timestamp}.mp4")
                 
                 try:
-                    log("🛠️ Нормализация структуры файла (Fast Start)...")
+                    log("🛠️ Нормализация структуры (Fast Start + GenPTS)...")
                     
-                    # ИСПРАВЛЕНИЕ ЗДЕСЬ: Добавлен параметр '-f mp4'
-                    cmd = f"ffmpeg -y -i {FILE_PATH} -c copy -movflags +faststart -f mp4 -loglevel error {temp_file}"
+                    # НОВОВВЕДЕНИЕ 2: Добавлен -fflags +genpts для фикса сломанных кадров записи экрана
+                    cmd = f"ffmpeg -y -fflags +genpts -i {FILE_PATH} -c copy -movflags +faststart -f mp4 -loglevel error {temp_file}"
                     subprocess.run(cmd, shell=True, timeout=30)
                     
                     if os.path.exists(temp_file) and os.path.getsize(temp_file) > 1024:
@@ -84,6 +97,7 @@ def watch_for_flags():
 # --- 2. АГРЕССИВНЫЙ ГРУЗЧИК (ОСНОВНОЙ ПОТОК) ---
 def upload_file(target_file):
     """Отправка через единую сессию для максимальной стабильности"""
+    global session # НОВОВВЕДЕНИЕ 3: Позволяем перезаписывать сессию
     api_url = "https://api.vk.com/method/"
     attempts = 0
     max_retries = 5
@@ -119,8 +133,12 @@ def upload_file(target_file):
             return True
             
         except Exception as e:
-            log(f"❌ Сбой сети/Таймаут соединения: {e}")
+            log(f"❌ Сбой сети (VLESS/Таймаут): {e}")
             attempts += 1
+            # НОВОВВЕДЕНИЕ 3: Жесткий сброс мертвых сокетов VPN
+            try: session.close()
+            except: pass
+            session = requests.Session()
             time.sleep(3)
             
     return False
